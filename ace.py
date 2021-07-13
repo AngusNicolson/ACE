@@ -8,6 +8,7 @@ and calculate each concept's TCAV score..
 from multiprocessing import dummy as multiprocessing
 import sys
 import os
+from pathlib import Path
 import numpy as np
 from PIL import Image
 import scipy.stats as stats
@@ -111,11 +112,15 @@ class ConceptDiscovery(object):
     Returns:
       Images of the desired concept or class.
     """
-    concept_dir = os.path.join(self.source_dir, concept)
+    concept_dir = Path(self.source_dir) / concept
     img_paths = [
-        os.path.join(concept_dir, d)
-        for d in tf.gfile.ListDirectory(concept_dir)
+        str(concept_dir / d)
+        for d in concept_dir.glob("*")
     ]
+    #img_paths = [
+    #    os.path.join(concept_dir, d)
+    #    for d in tf.gfile.ListDirectory(concept_dir)
+    #]
     return load_images_from_files(
         img_paths,
         max_imgs=max_imgs,
@@ -267,12 +272,12 @@ class ConceptDiscovery(object):
     """
     mask_expanded = np.expand_dims(mask, -1)
     patch = (mask_expanded * image + (
-        1 - mask_expanded) * float(self.average_image_value) / 255)
+        1 - mask_expanded) * -1)
     ones = np.where(mask == 1)
     h1, h2, w1, w2 = ones[0].min(), ones[0].max(), ones[1].min(), ones[1].max()
-    image = Image.fromarray((patch[h1:h2, w1:w2] * 255).astype(np.uint8))
+    image = Image.fromarray(((patch[h1:h2, w1:w2] + 1) * 127.5).astype(np.uint8))
     image_resized = np.array(image.resize(self.image_shape,
-                                          Image.BICUBIC)).astype(float) / 255
+                                          Image.BICUBIC)).astype(float) / 127.5 - 1
     return image_resized, patch
 
   def _patch_activations(self, imgs, bottleneck, bs=100, channel_mean=None):
@@ -468,10 +473,12 @@ class ConceptDiscovery(object):
     """
     rnd_acts_path = os.path.join(self.activation_dir, 'acts_{}_{}'.format(
         random_concept, bottleneck))
-    if not tf.gfile.Exists(rnd_acts_path):
+    if not Path(rnd_acts_path).exists():
       rnd_imgs = self.load_concept_imgs(random_concept, self.max_imgs)
+      if max(rnd_imgs.shape) < 224:
+            print(rnd_acts_path, rnd_imgs.shape)
       acts = get_acts_from_images(rnd_imgs, self.model, bottleneck)
-      with tf.gfile.Open(rnd_acts_path, 'w') as f:
+      with open(rnd_acts_path, 'wb') as f:
         np.save(f, acts, allow_pickle=False)
       del acts
       del rnd_imgs
@@ -586,8 +593,7 @@ class ConceptDiscovery(object):
     """
     if directory is None:
       directory = self.cav_dir
-    params = tf.contrib.training.HParams(model_type='linear', alpha=.01)
-    cav_key = cav.CAV.cav_key([c, r], bn, params.model_type, params.alpha)
+    cav_key = cav.CAV.cav_key([c, r], bn, "linear", 0.01) # cav.CAV.cav_key([c, r], bn, params.model_type, params.alpha)
     cav_path = os.path.join(self.cav_dir, cav_key.replace('/', '.') + '.pkl')
     vector = cav.CAV.load_cav(cav_path).cavs[0]
     return np.expand_dims(vector, 0) / np.linalg.norm(vector, ord=2)
